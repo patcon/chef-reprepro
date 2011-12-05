@@ -7,5 +7,7 @@ version          "0.2.2"
 
 depends "build-essential"
 depends "apache2"
+depends "apt"
+depends "gpg"
 
 recipe "reprepro", "Installs and configures reprepro for an apt repository"

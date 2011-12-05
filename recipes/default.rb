@@ -3,6 +3,7 @@
 # Recipe:: default
 #
 # Author:: Joshua Timberman <joshua@opscode.com>
+# Author:: AJ Christensen <aj@junglist.gen.nz>
 # Copyright 2010, Opscode
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -20,20 +21,18 @@
 
 include_recipe "build-essential"
 include_recipe "apache2"
+include_recipe "apt"
+include_recipe "gpg"
 
-apt_repo = data_bag_item("reprepro", "main")
-
-node.set_unless.reprepro.fqdn = apt_repo['fqdn']
-node.set_unless.reprepro.description = apt_repo['description']
-node.set_unless.reprepro.pgp_email = apt_repo['pgp']['email']
-node.set_unless.reprepro.pgp_fingerprint = apt_repo['pgp']['fingerprint']
+apt_repo = node.reprepro.to_hash
 
 ruby_block "save node data" do
   block do
     node.save
   end
   action :create
-end
+end unless Chef::Config[:solo]
+
 
 %w{apt-utils dpkg-dev reprepro debian-keyring devscripts dput}.each do |pkg|
   package pkg
@@ -62,30 +61,42 @@ end
     owner "nobody"
     group "nogroup"
     variables(
-      :codenames => apt_repo["codenames"],
-      :architectures => apt_repo["architectures"],
-      :incoming => apt_repo["incoming"],
-      :pulls => apt_repo["pulls"]
-    )
+              :codenames => apt_repo["codenames"],
+              :architectures => apt_repo["architectures"],
+              :incoming => apt_repo["incoming"],
+              :pulls => apt_repo["pulls"]
+              )
   end
 end
 
-execute "import packaging key" do
-  command "/bin/echo -e '#{apt_repo["pgp"]["private"]}' | gpg --import -"
-  user "root"
-  cwd "/root"
-  not_if "gpg --list-secret-keys --fingerprint #{node[:reprepro][:pgp_email]} | egrep -qx '.*Key fingerprint = #{node[:reprepro][:pgp_fingerprint]}'"
+directory "/root/.gnupg" do
+  mode 0700
 end
 
-template "#{apt_repo["repo_dir"]}/#{node[:reprepro][:pgp_email]}.gpg.key" do
-  source "pgp_key.erb"
-  mode "0644"
-  owner "nobody"
-  group "nogroup"
-  variables(
-    :pgp_public => apt_repo["pgp"]["public"]
-  )
-end
+
+
+# %w[pubring.gpg secring.gpg trustdb.gpg].map do |gpg_cookbook_file|
+#   cookbook_file File.join("/root/.gnupg/", gpg_cookbook_file) do
+#     mode 0600
+#   end
+# end
+
+# execute "import packaging key" do
+#   command "/bin/echo -e '#{apt_repo["pgp"]["private"]}' | gpg --import -"
+#   user "root"
+#   cwd "/root"
+#   not_if "gpg --list-secret-keys --fingerprint #{node[:reprepro][:pgp][:email]} | egrep -qx '.*Key fingerprint = #{node[:reprepro][:pgp][:fingerprint]}'"
+# end
+
+# template "#{apt_repo["repo_dir"]}/#{node[:reprepro][:pgp][:email]}.gpg.key" do
+#   source "pgp_key.erb"
+#   mode "0644"
+#   owner "nobody"
+#   group "nogroup"
+#   variables(
+#             :pgp_public => apt_repo["pgp"]["public"]
+#             )
+# end
 
 template "#{node[:apache][:dir]}/sites-available/apt_repo.conf" do
   source "apt_repo.conf.erb"
@@ -93,12 +104,45 @@ template "#{node[:apache][:dir]}/sites-available/apt_repo.conf" do
   owner "root"
   group "root"
   variables(
-    :repo_dir => apt_repo["repo_dir"]
-  )
+            :repo_dir => apt_repo["repo_dir"]
+            )
 end
 
 apache_site "apt_repo.conf"
 
 apache_site "000-default" do
   enable false
+end
+
+pgp_key = "#{apt_repo["repo_dir"]}/#{node.gpg.name.email}.gpg.key"
+execute "gpg --armor --export #{node.gpg.name.real} > #{pgp_key}" do
+  creates pgp_key
+end
+
+file pgp_key do
+  mode "0644"
+  owner "nobody"
+  group "nogroup"
+end
+
+execute "reprepro -Vb #{apt_repo['repo_dir']} export" do
+  action :nothing
+  subscribes :run, resources(:file => pgp_key), :immediately
+  user "root"
+  group "root"
+  environment "GNUPGHOME" => "/root/.gnupg"
+end
+
+execute "apt-key add #{pgp_key}" do
+  action :nothing
+  subscribes :run, resources(:file => pgp_key), :immediately
+end
+
+apt_repository "reprepro" do
+  uri "file://#{apt_repo['repo_dir']}"
+  distribution node.lsb.codename
+  components ["main"]
+  key pgp_key
+  action :nothing
+  subscribes :add, resources(:file => pgp_key), :delayed
 end

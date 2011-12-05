@@ -1,7 +1,6 @@
 <VirtualHost *:80>
-  ServerAdmin <%= node[:reprepro][:pgp_email] %>
+  ServerAdmin <%= node[:reprepro][:pgp][:email] %>
   ServerName <%= node[:reprepro][:fqdn] %>
-  ServerAlias <%= node[:hostname] %> <%= node[:fqdn] %>
 
   DocumentRoot <%= @repo_dir %>
   <Directory />
@@ -9,12 +8,18 @@
     AllowOverride None
   </Directory>
 
-  <Directory <%= @repo_dir %>>
+  <Directory "<%= @repo_dir %>">
     Options Indexes FollowSymLinks MultiViews
     AllowOverride None
     Order allow,deny
     allow from all
   </Directory>
+
+  <DirectoryMatch "<%= @repo_dir %>/(db|conf)">
+    Order allow,deny
+    Deny from all
+    Satisfy all
+  </DirectoryMatch>
 
   LogLevel warn
   ErrorLog /var/log/apache2/apt_repo-error.log 
